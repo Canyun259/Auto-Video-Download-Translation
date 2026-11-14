@@ -3,6 +3,8 @@ import os, shutil, re
 from pathlib import Path
 
 def ffmpeg_path():
+    bundled=Path(__file__).resolve().parent/'tools'/'bin'/'ffmpeg.exe'
+    if bundled.is_file() and bundled.with_name('ffprobe.exe').is_file(): return str(bundled)
     found=shutil.which('ffmpeg')
     if found: return found
     root=Path(os.environ.get('LOCALAPPDATA',Path.home()/'AppData'/'Local'))/'Microsoft'/'WinGet'/'Packages'

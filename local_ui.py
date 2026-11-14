@@ -261,7 +261,9 @@ def runtime(): return Runtime()
 
 def main():
     st.set_page_config(page_title='本地视频翻译台',layout='wide')
+    from version import __version__
     st.title('本地视频翻译台')
+    st.caption('版本 v'+__version__)
     st.caption('发现视频 → 自动翻译 → 保存独立字幕，或审核预览后烧录')
     rt=runtime(); cfg=settings()
     with st.sidebar:

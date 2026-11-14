@@ -31,3 +31,6 @@ Thumbs.db
 
 *.avi
 *.m4v
+
+tools/bin/
+dist/

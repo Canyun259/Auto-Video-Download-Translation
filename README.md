@@ -1,111 +1,85 @@
 # 本地视频翻译台
 
-面向 Windows 的视频发现、翻译、人工审核和双语字幕烧录工具，通过本地网页操作。
-本仓库仅包含本地部署代码，不包含云端服务、Docker、用户账号或运行数据。
+[![Windows CI](https://github.com/Canyun259/Auto-Video-Download-Translation/actions/workflows/ci-release.yml/badge.svg)](https://github.com/Canyun259/Auto-Video-Download-Translation/actions/workflows/ci-release.yml)
+[![Release](https://img.shields.io/github/v/release/Canyun259/Auto-Video-Download-Translation)](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest)
 
-## 功能
-- 定时扫描 Instagram（帖子和 Reels）、YouTube 频道及单条视频，支持可选 X 来源。
-- 候选列表展示封面、时长、发布者、发布时间和中文标题。
-- 按发布时间排序、按平台筛选、搜索发布者。
-- 手动选择视频后下载、识别和翻译，显示分阶段进度。
-- 翻译后进入审核区，允许修改原文、中文、标题及时间轴，再确认烧录。
-- 横竖屏字幕自适应换行；画面文字 OCR 默认关闭。
-- Windows 一键启动、重启、停止、重复启动检测和日志。
-- CPU 语音识别及可选 NVIDIA CUDA 加速。
+在 Windows 本机完成视频下载、语音识别、中文翻译、字幕审核与烧录，通过网页操作。
 
-## 准备环境
-推荐 Windows 10/11、Python 3.12（包含 Tkinter，安装时加入 PATH）。
-安装包含 libass/subtitles 滤镜的 FFmpeg，并将 ffmpeg、ffprobe 加入 PATH。
-YouTube 部分视频可能需要 JavaScript 运行环境，程序会使用 PATH 中的 Node.js。
-启动管理器依赖 Windows；其他系统的完整部署流程尚未验证。
+**当前版本：v1.1.0** · [下载发布版本](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest) · [更新日志](CHANGELOG.md) · [部署与升级](docs/DEPLOYMENT.md)
 
-## 安装和启动
-1. 下载仓库，双击“安装或更新依赖.bat”，它会在项目目录创建 .venv 并安装基础依赖。
-2. 将 .env.example 复制为 .env，填写自己的配置：
-   - TRANSLATE_API_KEY：翻译 API 密钥。
-   - TRANSLATE_BASE_URL：从供应商控制台复制 HTTPS OpenAI 兼容 Base URL，通常以 /v1 结尾，不带 /chat/completions。
-   - TRANSLATE_MODEL：模型名，默认为 qwen-mt-flash。其他模型需支持聊天接口和 JSON 输出。
-   - IG_USERNAME：需要 Instagram 登录时填写。
-   - X_BEARER_TOKEN：仅扫描 X 账号时需要。
-3. 双击“启动视频翻译台.bat”，浏览器自动打开 http://127.0.0.1:8501。
-4. 在侧栏填写账号、频道或视频 HTTPS 链接，每行一个，保存后扫描。YouTube 可分别添加频道 /videos 和 /shorts 页面。
-5. 在待选择区选择视频，翻译完成后进入审核区，修改并确认烧录。
-6. 成品保存在 local-data/output/平台/账号/日期_标题_短编号/result.mp4，同时保留字幕和审核稿。
+## 能做什么
 
-启动不会重复安装依赖；安装入口不更新项目代码。更新代码前停止服务，更新后按需安装依赖再启动。
-关闭网页或管理窗口不会停止服务，请使用“停止视频翻译台.bat”。处理中停止可能需要重试，已排队任务在重启后继续。
-管理窗口可检查环境、打开日志文件夹。日志位于 local-data/logs。
+- 扫描 Instagram（帖子/Reels）、YouTube 频道与视频；可选 X 账号来源。
+- 导入已下载的视频：填写本机路径或上传文件，按内容去重。
+- 生成原文、中文与双语 SRT、ASS 字幕，保留原视频；也可烧录成双语视频。
+- 在审核区修改字幕、时间轴和标题；调整字体、字号和位置，再查看实际烧录截图。
+- 可选画面 OCR、NVIDIA CUDA；默认 CPU 可运行。
+- 中文标题、发布者和时间筛选、处理进度、封面保存，以及按平台/账号整理输出目录。
 
-## 可选 NVIDIA 加速
-在项目目录 PowerShell 执行：
+## 快速部署
 
-    .\.venv\Scripts\python.exe -m pip install -r requirements-gpu.txt
+适用于 **Windows 10/11 + Python 3.12 64 位**。发布包是源码包，需要联网安装依赖及首次下载模型。
 
-保持显卡驱动和 CUDA 库兼容，在网页选择“自动”或“CUDA”并保存。
-自动模式在基础 CUDA 检查失败时使用 CPU，显存不足等运行错误需人工处理。
-首次语音模型下载需要网络。OCR 和 FFmpeg libx264 编码仍在 CPU 上执行。
-可选 GPU 依赖不能保证适用于所有 NVIDIA 显卡。
+1. 从 [Releases](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest) 下载 ZIP 并解压。
+2. 安装 Python 3.12（包含 Tkinter）、FFmpeg/ffprobe；YouTube 推荐 Node.js LTS。具体命令见 [部署指南](docs/DEPLOYMENT.md)。
+3. 双击 **安装或更新依赖.bat**（或 `install-local.bat`）。自动创建虚拟环境和首次 `.env`，保留已有配置。
+4. 编辑 `.env`，填写 `TRANSLATE_API_KEY`、`TRANSLATE_BASE_URL`、`TRANSLATE_MODEL`。Base URL 使用供应商的 HTTPS OpenAI 兼容接口，不带 `/chat/completions`；默认模型为 `qwen-mt-flash`。
+5. 运行 `check-local.bat`，通过后双击 **启动视频翻译台.bat**。打开 http://127.0.0.1:8501。
 
-## 平台登录
-仅访问自己有权访问的内容，程序不绕过平台安全验证。
+可选：将可信的 `ffmpeg.exe` 和 `ffprobe.exe` 放在项目 `tools/bin/`，无需修改 PATH。
 
-1. 在浏览器登录 Instagram 并完成验证。
-2. 用自己信任的工具，仅导出需要的平台的 Netscape 格式 Cookies。
-3. 创建 local-data/secrets，将导出文件保存为 cookies.txt。
-4. 在项目目录运行（替换 YOUR_USERNAME）：
+## 使用流程
 
-    .\.venv\Scripts\python.exe import_instagram_cookies.py --username YOUR_USERNAME --check-api current-user
+**本地视频**：展开页面顶部的本地视频导入 → 路径/上传 → 待选择。
 
-成功后生成 instagram.session，在 .env 中设置相同的 IG_USERNAME，重启。
-若遇到 feedback_required 或安全验证，先回浏览器处理，不要反复重试。
-YouTube 公开内容可先不提供凭证；需要登录时，同一路径的 Cookies 文件供下载器使用。
-X 为可选能力，不添加来源即可不使用；账号扫描需自己的 API 访问权限。
+**在线视频**：在侧栏填写账号、频道或单条视频 HTTPS 链接 → 保存并检测 → 待选择。YouTube 可分别添加频道 `/videos`、`/shorts`。
 
-## 字幕、费用和限制
-- faster-whisper 识别语音并生成时间戳，中文沿用原文分段时间轴；识别和翻译结果需要审核。
-- 尝试保留一份平台人工字幕，但烧录字幕来自重新识别音轨，暂不支持手动导入 SRT。
-- OCR 每约 0.5 秒采样，可能识别标志、用户名等无关文字。译文统一置顶，不是逐字贴在原字幕旁。
-- 语音识别和烧录在本地执行。候选视频标题会自动发送到翻译接口；字幕在选择处理后发送。两者都可能产生 API 费用。
-- 进度条表示当前阶段，不是精确剩余时间；模型加载或未知下载大小时可能停在零。
-- 平台限制、接口变化和网络可能导致发现或下载失败，不保证获取全部视频。
-- 服务只监听本机，没有面向公网的身份认证，不应直接开放到公网。
-- 运行数据不会自动清理。local-data、.env、登录凭证、模型和视频均不应提交 Git。
+选择输出方式后开始处理：
 
-## 代码结构
-- local_ui.py：网页、视频发现和处理队列。
-- subtitle_core.py：时间轴、翻译、字幕导出及可选 X 发现函数。
-- review_tools.py：审核校验、字幕排版和烧录。
-- mt_translation.py：千问 MT 适配。
-- video_metadata.py：视频信息和数据库迁移。
-- launcher.py：Windows 启动管理。
-- import_instagram_cookies.py：导入用户导出的 Cookies。
+- **独立字幕**：视频和字幕完成后进入已完成，可下载字幕、返回审核。
+- **烧录字幕**：翻译后进入审核区 → 修改文字/样式 → 选择时间点更新预览 → 确认烧录。
 
-## 开发验证
-安装依赖后，在项目目录运行：
+成品保存于 `local-data/output/平台/账号/日期_标题_短编号/`，保留源视频、字幕及审核稿。字幕锚点的横向为居中位置、纵向为底边，单位为画面百分比。修改后需重新生成预览，长字幕会自动缩小以适应画面。
 
-    .\.venv\Scripts\python.exe -m unittest discover -p "test_*.py"
+关闭网页或管理窗口不会停止服务，请使用停止入口。安装或升级前请等任务结束并停止服务。
 
-check_ui.py 为界面冒烟检查，会生成本目录的运行数据，只应在未运行服务的独立测试副本中使用。
-单元测试不调用真实账号或翻译接口，不代表所有平台的端到端验证。
+## 升级与版本
 
-## 开源与贡献
-使用 MIT 许可证，见 LICENSE。第三方依赖、模型及服务适用各自的许可证和条款。
-提交问题时提供复现步骤和脱敏错误信息，不要上传密钥、Cookie、登录会话、私人视频或运行数据库。
+版本采用 `主版本.次版本.修订号`，`VERSION` 是唯一版本号来源，Git 标签使用 `v1.1.0` 形式。网页和启动管理器显示版本。
 
-## 可读的视频目录
-视频按“平台 / 发布账号 / 发布日期_中文标题_短编号”保存，优先使用中文标题，缺失时使用原标题。
-非法文件名字符会替换，过长标题截短；短编号防止同名覆盖。首次下载后目录固定，后续编辑标题不会更改路径。
-旧编号目录仍兼容。若从旧版本升级，可先停止服务，在项目目录执行：
-    .\.venv\Scripts\python.exe output_paths.py
-整理工具只移动已知的视频目录，不覆盖现有目标；没有历史数据时无需运行。
+- **发布 ZIP 用户**：停止服务，备份 `.env`、`local-data/`，新版本解压到新目录，复制配置与数据，再安装和启动。不要搬运旧 `.venv`。
+- **Git 用户**：停止服务并备份数据后，运行 `update-local.bat`。仅支持干净的 main 分支、官方 origin 和快进更新；不覆盖本地代码改动。
+- 回退时使用旧代码与升级前数据备份，详见 [部署指南](docs/DEPLOYMENT.md)。
 
-审核确认后，烧录任务会将平台封面保存为同目录 cover.jpg。封面下载失败不会阻断视频烧录，已完成页提供“保存/重试封面”，也可用于为旧成品补存封面。
+发布标签后，GitHub Actions 自动测试并生成源码 ZIP、SHA256 校验文件和 Release，详见 [版本发布规范](docs/RELEASING.md)。
 
+## 平台登录与 GPU
 
-## 本地导入、字幕文件与烧录预览
+- Instagram 登录：从已登录浏览器导出所需平台的 Netscape Cookies 到 `local-data/secrets/cookies.txt`，运行 `import_instagram_cookies.py --username YOUR_USERNAME --check-api current-user`，再在 `.env` 填写对应 `IG_USERNAME`。有安全验证时先回浏览器完成。
+- YouTube 公开内容可先不提供凭证；需要登录时使用上述 Cookies 路径。
+- X 账号扫描需自己的 `X_BEARER_TOKEN` 和 API 权限，不添加来源即可不用。
+- GPU：`install-local.bat --gpu` 安装可选库，网页选择自动/CUDA；硬件和驱动需兼容。OCR 和视频烧录仍使用 CPU。
 
-- 页面顶部展开「导入已下载的本地视频」，填写本机完整路径（适合大视频）或上传文件。支持 MP4、MKV、MOV、WEBM、AVI、M4V，按文件内容去重。导入会复制视频到输出目录，不修改原文件；在「待选择」中开始处理，也可按「本地视频」筛选。
-- 选择「下载视频＋生成独立字幕文件」，保存原视频及原文、中文、双语 SRT 和双语 ASS，无需烧录。完成页支持下载字幕及返回审核。
-- 选择「预览审核后烧录字幕」，审核区可以修改字体、字号（原视频像素）以及水平、垂直位置。水平为居中锚点、垂直为字幕底边，单位为画面百分比。画面文字保持顶部显示。
-- 选择时间点并点击「更新字幕预览」生成真实烧录截图。修改后请更新预览；无字幕的时间点显示原画面。预览与最终烧录使用同一套排版逻辑，长字幕会自动缩小。字体需在本机安装。
-- 审核区也可直接保存视频和字幕文件，字幕会包含审核后的修改。
+## 限制与数据
+
+识别和翻译结果需要审核。尝试保留平台人工字幕，但生成字幕来自重新识别音轨，暂不支持手动导入 SRT。OCR 可能识别标志等无关文字，画面译文统一置顶。
+
+语音识别和烧录在本地执行；标题和字幕会发送到你配置的翻译接口，可能产生费用。平台接口、访问权限和网络变化可能影响下载。
+
+服务仅监听本机，没有公网登录认证。`.env`、Cookie、数据库、模型及视频属于私人运行数据，不应提交 Git；数据不会自动清理，请自行备份。日志位于 `local-data/logs/`。
+
+## 仓库结构
+
+| 文件/目录 | 用途 |
+| --- | --- |
+| `local_ui.py` / `local_import.py` | 网页、处理队列与本地视频导入 |
+| `subtitle_core.py` / `mt_translation.py` | 时间轴、翻译与字幕导出 |
+| `review_tools.py` | 审核、排版、预览与烧录 |
+| `output_paths.py` / `video_metadata.py` | 输出目录与视频数据库 |
+| `launcher.py` / `deploy.py` | 启动管理、安装、检查与升级 |
+| `VERSION` / `CHANGELOG.md` | 统一版本号与更新记录 |
+| `docs/` | 部署升级、版本发布文档 |
+| `.github/workflows/` | Windows 测试与标签发布 |
+| `test_*.py` | 单元与本地媒体集成测试 |
+
+开发与测试见 [CONTRIBUTING.md](CONTRIBUTING.md)。许可为 [MIT](LICENSE)，第三方依赖、模型和服务适用各自条款。

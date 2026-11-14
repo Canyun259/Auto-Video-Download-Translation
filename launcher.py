@@ -1,6 +1,7 @@
 """Local Windows service manager; only controls this project's Streamlit process."""
 import os,sys,time,json,socket,subprocess,threading,queue,webbrowser,importlib.util,sqlite3
 from pathlib import Path
+from version import __version__
 BASE=Path(__file__).resolve().parent
 PYTHON=BASE/'.venv'/'Scripts'/'python.exe'
 APP=BASE/'local_ui.py'
@@ -105,7 +106,7 @@ def stop():
 def gui(action=None):
     import tkinter as tk
     from tkinter import ttk,messagebox
-    root=tk.Tk();root.title('本地视频翻译台 · 启动管理');root.geometry('620x380')
+    root=tk.Tk();root.title('本地视频翻译台 v'+__version__+' · 启动管理');root.geometry('620x380')
     status=tk.StringVar(value='正在检查状态…');messages=queue.Queue();buttons=[]
     ttk.Label(root,text='本地视频翻译台',font=('Microsoft YaHei UI',20)).pack(pady=20)
     ttk.Label(root,textvariable=status,wraplength=570).pack(pady=10)
