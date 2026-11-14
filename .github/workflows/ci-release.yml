@@ -44,7 +44,7 @@ jobs:
           "@ | Set-Content -Encoding utf8 .env
           python deploy.py install
       - name: Unit and media integration tests
-        run: .\.venv\Scripts\python.exe -m unittest discover -p "test_*.py" -v
+        run: .\.venv\Scripts\python.exe ci_tests.py
       - name: Web UI smoke test (isolated runner)
         run: .\.venv\Scripts\python.exe check_ui.py
 
