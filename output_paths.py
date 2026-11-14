@@ -21,6 +21,7 @@ def readable_path(row):
     row = dict(row)
     host = urlparse(row.get('url') or '').hostname or ''
     platform = 'Instagram' if host.endswith('instagram.com') else 'YouTube' if host.endswith('youtube.com') or host == 'youtu.be' else 'X'
+    if (row.get('url') or '').startswith('local://'): platform = '本地视频'
     date = (row.get('published_at') or '')[:10]
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}', date):
         date = '日期未知'

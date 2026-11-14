@@ -10,6 +10,11 @@ BASE = Path(__file__).resolve().parent
 if str(BASE) not in sys.path:
     sys.path.insert(0, str(BASE))
 importlib.invalidate_caches()
+# Streamlit reruns this file but can retain helpers imported before an update.
+import review_tools
+if not all(hasattr(review_tools, name) for name in
+           ('subtitle_style', 'preview_frame', 'export_subtitles')):
+    importlib.reload(review_tools)
 load_dotenv(BASE / '.env')
 DATA = BASE / 'local-data'
 DATA.mkdir(exist_ok=True)
@@ -24,6 +29,11 @@ def db():
     c.execute('CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY,body TEXT)')
     from video_metadata import migrate
     migrate(c)
+    columns={r[1] for r in c.execute('PRAGMA table_info(videos)')}
+    if 'output_mode' not in columns:
+        try: c.execute("ALTER TABLE videos ADD COLUMN output_mode TEXT DEFAULT 'burn'")
+        except sqlite3.OperationalError:
+            if 'output_mode' not in {r[1] for r in c.execute('PRAGMA table_info(videos)')}: raise
     return c
 
 def settings():
@@ -159,22 +169,23 @@ def process(row, model_name, device_mode='auto'):
     from yt_dlp import YoutubeDL
     from faster_whisper import WhisperModel
     folder=output_folder(DATA,row,create=True)
-    update(row['id'],'下载中')
-    with YoutubeDL({**opts(),'outtmpl':str(folder/'source.%(ext)s'),'format':'bv*+ba/b','merge_output_format':'mp4','noplaylist':True,'writesubtitles':False,'writeautomaticsub':False,'progress_hooks':[lambda d:set_progress(row['id'],d.get('downloaded_bytes',0)/(d.get('total_bytes') or d.get('total_bytes_estimate') or 1))]}) as y:
-        downloaded_info=y.extract_info(row['url'],download=True)
-    # Preserve at most one manual platform subtitle, without blocking the video.
-    available=downloaded_info.get('subtitles') or {}
-    languages=[k for k in available if k != 'live_chat']
-    if languages:
-        language=downloaded_info.get('language')
-        selected=language if language in languages else languages[0]
-        try:
-            with YoutubeDL({**opts(),'outtmpl':str(folder/'source.%(ext)s'),'skip_download':True,'writesubtitles':True,'writeautomaticsub':False,'subtitleslangs':[selected],'subtitlesformat':'srt/best','retries':0}) as y:
-                y.process_ie_result(downloaded_info,download=True)
-        except Exception as exc:
-            from media_tools import safe_error
-            (folder/'subtitle-warning.txt').write_text(safe_error(exc),encoding='utf-8')
-    videos=[p for p in folder.glob('source.*') if p.suffix in {'.mp4','.webm','.mkv','.mov'}]
+    if not row['url'].startswith('local://'):
+        update(row['id'],'下载中')
+        with YoutubeDL({**opts(),'outtmpl':str(folder/'source.%(ext)s'),'format':'bv*+ba/b','merge_output_format':'mp4','noplaylist':True,'writesubtitles':False,'writeautomaticsub':False,'progress_hooks':[lambda d:set_progress(row['id'],d.get('downloaded_bytes',0)/(d.get('total_bytes') or d.get('total_bytes_estimate') or 1))]}) as y:
+            downloaded_info=y.extract_info(row['url'],download=True)
+        # Preserve at most one manual platform subtitle, without blocking the video.
+        available=downloaded_info.get('subtitles') or {}
+        languages=[k for k in available if k != 'live_chat']
+        if languages:
+            language=downloaded_info.get('language')
+            selected=language if language in languages else languages[0]
+            try:
+                with YoutubeDL({**opts(),'outtmpl':str(folder/'source.%(ext)s'),'skip_download':True,'writesubtitles':True,'writeautomaticsub':False,'subtitleslangs':[selected],'subtitlesformat':'srt/best','retries':0}) as y:
+                    y.process_ie_result(downloaded_info,download=True)
+            except Exception as exc:
+                from media_tools import safe_error
+                (folder/'subtitle-warning.txt').write_text(safe_error(exc),encoding='utf-8')
+    videos=[p for p in folder.glob('source.*') if p.suffix in {'.mp4','.webm','.mkv','.mov','.avi','.m4v'}]
     if not videos: raise RuntimeError('未下载到视频')
     video=videos[0]
     update(row['id'],'语音识别中')
@@ -201,7 +212,14 @@ def process(row, model_name, device_mode='auto'):
         screen=app.translate(raw,progress=lambda n,total:set_progress(row['id'],n/total)) if raw else []
         app.write_srt(folder/'screen-chinese.srt',screen)
     (folder/'transcript.json').write_text(json.dumps({'language':info.language,'original':cues,'chinese':zh,'screen':screen},ensure_ascii=False),encoding='utf-8')
-    update(row['id'],'review')
+    if row['output_mode']=='files':
+        from review_tools import export_subtitles
+        export_subtitles(folder,json.loads((folder/'transcript.json').read_text(encoding='utf-8')),video)
+        from cover_tools import save_cover
+        save_cover(folder,row['thumb'])
+        update(row['id'],'done')
+    else:
+        update(row['id'],'review')
 
 class Runtime:
     def __init__(self):
@@ -244,7 +262,7 @@ def runtime(): return Runtime()
 def main():
     st.set_page_config(page_title='本地视频翻译台',layout='wide')
     st.title('本地视频翻译台')
-    st.caption('发现视频 → 自动翻译 → 人工审核修改 → 确认烧录 → 保存本地')
+    st.caption('发现视频 → 自动翻译 → 保存独立字幕，或审核预览后烧录')
     rt=runtime(); cfg=settings()
     with st.sidebar:
         st.header('监控设置')
@@ -269,37 +287,83 @@ def main():
         st.caption('扫描后自动翻译标题并缓存；仅翻译标题不会下载或翻译视频。标题翻译会使用少量 API 额度。')
         st.caption('画面文字识别默认关闭；仅在单个视频勾选后启用。')
         if rt.errors: st.warning('\n'.join(rt.errors[-5:]))
+    render_local_import()
     show_library()
 
+def render_local_import():
+    with st.expander('导入已下载的本地视频'):
+        st.caption('导入后出现在「待选择」，可生成独立字幕或预览后烧录。原文件保持不变；导入的视频会复制到输出目录。')
+        method=st.radio('导入方式',['本机文件路径（适合大视频）','上传视频文件'],horizontal=True)
+        source=st.text_input('视频完整路径',placeholder=r'D:\Videos\video.mp4') if method.startswith('本机') else st.file_uploader('选择已下载的视频',type=['mp4','mkv','mov','webm','avi','m4v'])
+        if st.button('导入到待选择',key='import-local'):
+            if not source: st.error('请先填写路径或选择视频')
+            else:
+                try:
+                    from local_import import import_video
+                    with st.spinner('正在检查并复制视频…'):
+                        ident,created=import_video(DATA,db,source,getattr(source,'name',None))
+                    st.session_state['local-import-message']='视频已导入「待选择」。' if created else '该视频已经导入，请在视频库中查找。'
+                    st.rerun()
+                except Exception as exc:
+                    from media_tools import safe_error
+                    st.error(safe_error(exc))
+        if st.session_state.get('local-import-message'):
+            st.success(st.session_state.pop('local-import-message'))
+
+
 def render_review(row,folder):
-    from review_tools import atomic_json,validate_edit,video_info
+    from review_tools import atomic_json,validate_edit,video_info,subtitle_style,preview_frame,export_subtitles
     data=json.loads((folder/'transcript.json').read_text(encoding='utf-8'))
-    source=next((p for p in folder.glob('source.*') if p.suffix in {'.mp4','.webm','.mkv','.mov'}),None)
+    source=next((p for p in folder.glob('source.*') if p.suffix in {'.mp4','.webm','.mkv','.mov','.avi','.m4v'}),None)
     if source: st.video(str(source))
+    w,h,duration=video_info(source) if source else (1280,720,None)
+    style=subtitle_style(data.get('subtitle_style'),w,h)
+    st.caption('字幕位置以画面百分比表示：水平为居中锚点，垂直为字幕底边。画面文字保持顶部显示。')
     with st.form('edit-'+row['id']):
         title=st.text_input('中文标题',row['title_zh'] or row['title'])
         table=st.data_editor([{'开始':a[0],'结束':a[1],'原文':a[2],'中文':b[2]} for a,b in zip(data['original'],data['chinese'])],key='editor-'+row['id'],num_rows='fixed')
         screen=st.data_editor([{'开始':a,'结束':b,'原文':'','中文':t} for a,b,t in data.get('screen',[])],key='screen-'+row['id'],num_rows='fixed') if data.get('screen') else []
+        font=st.selectbox('字幕字体',['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'],index=(['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'].index(style['font']) if style['font'] in ['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'] else 0))
+        size=st.number_input('字幕字号（原视频像素）',10,200,style['size'])
+        x=st.slider('水平位置（%）',5,95,int(style['x']))
+        y=st.slider('垂直位置（%）',5,95,int(style['y']))
+        second=st.number_input('预览时间（秒）',min_value=0.,max_value=max(0.,(duration or 1)-.05),value=min(float(data['original'][0][0])+.1,max(0.,(duration or 1)-.05)) if data['original'] else 0.,step=.1)
+        preview=st.form_submit_button('更新字幕预览')
         save=st.form_submit_button('保存修改')
+        files=st.form_submit_button('保存视频和字幕文件（不烧录）')
         approve=st.form_submit_button('确认审核并烧录')
-    if save or approve:
+    if save or approve or preview or files:
         try:
             duration=video_info(source)[2] if source else None
             data['original'],data['chinese']=validate_edit(table,duration)
             if screen: _,data['screen']=validate_edit(screen,duration)
+            data['subtitle_style']=subtitle_style({'font':font,'size':size,'x':x,'y':y},w,h)
             atomic_json(folder/'transcript.json',data)
             with db() as c: c.execute('UPDATE videos SET title_zh=? WHERE id=?',(title,row['id']))
-            if approve: update(row['id'],'burn_queued');st.rerun()
+            if preview:
+                with st.spinner('正在生成实际烧录效果…'):
+                    image=preview_frame(folder,data,second)
+                st.success('预览已更新，使用当前保存的字幕和样式。')
+            elif files:
+                export_subtitles(folder,data,source)
+                with db() as c: c.execute("UPDATE videos SET output_mode='files' WHERE id=?",(row['id'],))
+                update(row['id'],'done');st.rerun()
+            elif approve:
+                with db() as c: c.execute("UPDATE videos SET output_mode='burn' WHERE id=?",(row['id'],))
+                update(row['id'],'burn_queued');st.rerun()
             else: st.success('修改已保存')
         except Exception as exc: st.error(str(exc))
+    if (folder/'preview.png').exists():
+        st.image(str(folder/'preview.png'),caption='上次生成的烧录预览；修改字幕或样式后请点击更新字幕预览。')
 
 @st.fragment(run_every=5)
 def show_library():
     with db() as c: rows=c.execute('SELECT * FROM videos ORDER BY rowid DESC').fetchall()
-    platform=st.selectbox('发布平台',['全部','Instagram','YouTube','X'])
+    platform=st.selectbox('发布平台',['全部','Instagram','YouTube','X','本地视频'])
     publisher=st.text_input('搜索发布者（名称或主页）').strip().casefold()
     order=st.selectbox('排序',['发布时间：最新优先','发布时间：最早优先'])
     def platform_name(url):
+        if url.startswith('local://'): return '本地视频'
         host=urlparse(url).hostname or ''
         return 'Instagram' if 'instagram.com' in host else 'YouTube' if 'youtube.com' in host or host=='youtu.be' else 'X'
     rows=[r for r in rows if (platform=='全部' or platform_name(r['url'])==platform) and (not publisher or publisher in ((r['publisher'] or '')+' '+(r['publisher_url'] or '')).casefold())]
@@ -336,7 +400,7 @@ def show_library():
                             value=1.0 if r['state']=='done' else float(r['progress'] or 0)
                             st.progress(value,text=f"{r['state']} · 当前阶段 {value:.0%}")
                             st.caption('按阶段计量；准备模型或请求返回前进度可能暂时不变。')
-                        st.link_button('打开原视频',r['url'])
+                        if not r['url'].startswith('local://'): st.link_button('打开原视频',r['url'])
                         folder=output_folder(DATA,r)
                         if r['state'] in {'done','failed'} and (folder/'transcript.json').exists():
                             if st.button('返回审核（不重新翻译）',key='review-'+r['id']):
@@ -344,17 +408,24 @@ def show_library():
                         if r['state']=='review':
                             render_review(r,folder)
                         if r['state'] in {'waiting','failed'}:
+                            mode=st.radio('输出方式',['burn','files'],format_func=lambda v: '预览审核后烧录字幕' if v=='burn' else '下载视频＋生成独立字幕文件（不烧录）',key='mode-'+r['id'])
                             ocr=st.checkbox('识别并翻译画面中的字幕/文字',False,key='ocr'+r['id'])
-                            if st.button('翻译并送审' if r['state']=='waiting' else '重试',key=r['id']):
+                            if st.button(('翻译并送审' if mode=='burn' else '下载并生成字幕') if r['state']=='waiting' else '重试',key=r['id']):
                                 if not os.getenv('TRANSLATE_API_KEY'): st.error('请先填写 .env 中的翻译服务配置并重启')
                                 else:
-                                    with db() as c: c.execute("UPDATE videos SET state='queued',ocr=?,error='' WHERE id=? AND state IN ('waiting','failed')",(int(ocr),r['id']))
+                                    with db() as c: c.execute("UPDATE videos SET state='queued',ocr=?,output_mode=?,error='' WHERE id=? AND state IN ('waiting','failed')",(int(ocr),mode,r['id']))
                                     st.rerun()
                         if r['error']: st.error(r['error'])
                         if r['state']=='done':
                             folder=output_folder(DATA,r)
-                            st.video(str(folder/'result.mp4'))
-                            st.caption('已保存：'+str(folder/'result.mp4'))
+                            video=(folder/'result.mp4') if r['output_mode']!='files' else next((p for p in folder.glob('source.*') if p.suffix in {'.mp4','.mkv','.webm','.mov'}),None)
+                            if video and video.exists():
+                                st.video(str(video))
+                                st.caption('已保存：'+str(video))
+                            st.caption('字幕及原视频目录：'+str(folder))
+                            for name in ['original.srt','chinese.srt','bilingual.srt','bilingual.ass','screen-chinese.srt']:
+                                path=folder/name
+                                if path.exists(): st.download_button('下载 '+name,path.read_bytes(),file_name=name,key='download-'+r['id']+name)
                             if (folder/'cover.jpg').exists():
                                 st.caption('封面已保存：'+str(folder/'cover.jpg'))
                             else:

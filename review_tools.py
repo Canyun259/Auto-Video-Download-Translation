@@ -25,8 +25,20 @@ def wrap(text,limit):
     if line:lines.append(line)
     return r'\N'.join(lines)
 
-def fit_ass(path,original,chinese,screen,w,h):
-    font=max(12,round(w*0.038));margin=max(12,round(w*0.045))
+def subtitle_style(style,w,h):
+    style=style or {}
+    font=str(style.get('font','Microsoft YaHei'))
+    if not font or any(c in font for c in ',\n\r{}\\'): raise ValueError('字体名称无效')
+    size=int(style.get('size',max(12,round(w*.038))))
+    x=float(style.get('x',50)); y=float(style.get('y',93))
+    if not 10<=size<=200 or not math.isfinite(x+y) or not 5<=x<=95 or not 5<=y<=95:
+        raise ValueError('字号需在 10–200，位置需在 5–95% 之间')
+    return {'font':font,'size':size,'x':x,'y':y}
+
+
+def fit_ass(path,original,chinese,screen,w,h,style=None):
+    style=subtitle_style(style,w,h)
+    font=style['size'];margin=max(12,round(w*0.045))
     header=f'''[Script Info]
 ScriptType: v4.00+
 PlayResX: {w}
@@ -34,8 +46,8 @@ PlayResY: {h}
 WrapStyle: 2
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Speech,Microsoft YaHei,{font},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,{margin},{margin},{round(h*.07)},1
-Style: Screen,Microsoft YaHei,{font},&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,8,{margin},{margin},{round(h*.05)},1
+Style: Speech,{style["font"]},{font},&H00FFFFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,2,{margin},{margin},{round(h*.07)},1
+Style: Screen,{style["font"]},{font},&H0000FFFF,&H00FFFFFF,&H00000000,&H80000000,0,0,0,0,100,100,0,0,1,2,0,8,{margin},{margin},{round(h*.05)},1
 [Events]
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 '''
@@ -46,21 +58,45 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     for index,(a,b,text) in enumerate(original):
         size=font
         while True:
-            width=max(8,int((w-2*margin)/(size*.65)))
+            width=max(8,int(min(w-2*margin,2*w*min(style['x'],100-style['x'])/100)/(size*.65)))
             body=wrap(chinese[index][2],width)+r'\N'+wrap(text,width)
             if (body.count(r'\N')+1)*size*1.4<h*.5 or size<=10:break
             size-=1
-        lines.append(f'Dialogue: 0,{stamp(a)},{stamp(b)},Speech,,0,0,0,,'+r'{\fs'+str(size)+'}'+body)
+        lines.append(f'Dialogue: 0,{stamp(a)},{stamp(b)},Speech,,0,0,0,,'+r'{\an2\pos('+str(round(w*style['x']/100))+','+str(round(h*style['y']/100))+r')\fs'+str(size)+'}'+body)
     for a,b,text in screen:lines.append(f'Dialogue: 1,{stamp(a)},{stamp(b)},Screen,,0,0,0,,'+wrap(text,max(8,int((w-2*margin)/(font*.65)))))
     path.write_text(header+'\n'.join(lines),encoding='utf-8')
 
+def export_subtitles(folder,data,video=None):
+    import subtitle_core as app
+    if video is None:
+        video=next(p for p in folder.glob('source.*') if p.suffix in {'.mp4','.mkv','.mov','.webm','.avi','.m4v'})
+    w,h,_=video_info(video)
+    fit_ass(folder/'bilingual.ass',data['original'],data['chinese'],data.get('screen',[]),w,h,data.get('subtitle_style'))
+    app.write_srt(folder/'original.srt',data['original'])
+    app.write_srt(folder/'chinese.srt',data['chinese'])
+    app.write_srt(folder/'bilingual.srt',[(a,b,data['chinese'][i][2]+'\n'+text) for i,(a,b,text) in enumerate(data['original'])])
+    if data.get('screen'):
+        app.write_srt(folder/'screen-chinese.srt',data['screen'])
+
+
+def preview_frame(folder,data,second):
+    video=next(p for p in folder.glob('source.*') if p.suffix in {'.mp4','.mkv','.mov','.webm','.avi','.m4v'})
+    w,h,duration=video_info(video)
+    second=max(0,min(float(second),max(0,duration-.05)))
+    fit_ass(folder/'preview.ass',data['original'],data['chinese'],data.get('screen',[]),w,h,data.get('subtitle_style'))
+    # Seek after the input so libass sees the original timeline.
+    command=[ffmpeg_path(),'-nostdin','-y','-i',video.name,'-vf','ass=preview.ass',
+             '-ss',str(second),'-frames:v','1','-update','1','preview.png']
+    with (folder/'preview.log').open('w') as log:
+        subprocess.run(command,cwd=folder,stdout=log,stderr=log,check=True,timeout=120)
+    return folder/'preview.png'
+
+
 def encode(folder,report):
     data=json.loads((folder/'transcript.json').read_text(encoding='utf-8'))
-    video=next(p for p in folder.glob('source.*') if p.suffix in {'.mp4','.mkv','.mov','.webm'})
+    video=next(p for p in folder.glob('source.*') if p.suffix in {'.mp4','.mkv','.mov','.webm','.avi','.m4v'})
     w,h,duration=video_info(video)
-    fit_ass(folder/'bilingual.ass',data['original'],data['chinese'],data.get('screen',[]),w,h)
-    import subtitle_core as app
-    app.write_srt(folder/'original.srt',data['original']);app.write_srt(folder/'chinese.srt',data['chinese'])
+    export_subtitles(folder,data,video)
     progress=folder/'encode-progress.txt';progress.write_text('')
     command=[ffmpeg_path(),'-nostdin','-y','-i',video.name,'-vf','ass=bilingual.ass','-map','0:v:0','-map','0:a?','-c:v','libx264','-crf','20','-c:a','aac','-movflags','+faststart','-progress',progress.name,'-nostats','result.tmp.mp4']
     with (folder/'ffmpeg.log').open('w') as log:
