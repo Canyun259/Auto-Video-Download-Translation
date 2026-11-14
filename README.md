@@ -1,7 +1,8 @@
 # 本地视频翻译台
 
-[![Windows CI](https://github.com/Canyun259/Auto-Video-Download-Translation/actions/workflows/ci-release.yml/badge.svg)](https://github.com/Canyun259/Auto-Video-Download-Translation/actions/workflows/ci-release.yml)
-[![Release](https://img.shields.io/github/v/release/Canyun259/Auto-Video-Download-Translation)](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest)
+[![Windows CI](https://github.com/Canyun259/Auto-Video-Download-Translation/actions/workflows/ci-release.yml/badge.svg?branch=main&event=push)](https://github.com/Canyun259/Auto-Video-Download-Translation/actions/workflows/ci-release.yml)
+
+[![Release](https://img.shields.io/github/v/release/Canyun259/Auto-Video-Download-Translation?cacheSeconds=300)](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest)
 
 在 Windows 本机完成视频下载、语音识别、中文翻译、字幕审核与烧录，通过网页操作。
 
