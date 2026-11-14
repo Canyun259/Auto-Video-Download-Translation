@@ -6,7 +6,7 @@
 
 在 Windows 本机完成视频下载、语音识别、中文翻译、字幕审核与烧录，通过网页操作。
 
-**当前版本：v1.1.0** · [下载发布版本](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest) · [更新日志](CHANGELOG.md) · [部署与升级](docs/DEPLOYMENT.md)
+**当前版本：v1.1.1** · [下载发布版本](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest) · [更新日志](CHANGELOG.md) · [部署与升级](docs/DEPLOYMENT.md)
 
 ## 能做什么
 

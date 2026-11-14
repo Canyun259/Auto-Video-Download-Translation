@@ -13,7 +13,7 @@ importlib.invalidate_caches()
 # Streamlit reruns this file but can retain helpers imported before an update.
 import review_tools
 if not all(hasattr(review_tools, name) for name in
-           ('subtitle_style', 'preview_frame', 'export_subtitles')):
+           ('subtitle_style', 'preview_frame', 'export_subtitles', 'is_blank_cell')):
     importlib.reload(review_tools)
 load_dotenv(BASE / '.env')
 DATA = BASE / 'local-data'
@@ -323,6 +323,7 @@ def render_review(row,folder):
     st.caption('字幕位置以画面百分比表示：水平为居中锚点，垂直为字幕底边。画面文字保持顶部显示。')
     with st.form('edit-'+row['id']):
         title=st.text_input('中文标题',row['title_zh'] or row['title'])
+        st.caption('合并字幕后，请同时清空多余行的原文和中文，该行会被忽略；保留行的结束时间请覆盖合并后的整段。')
         table=st.data_editor([{'开始':a[0],'结束':a[1],'原文':a[2],'中文':b[2]} for a,b in zip(data['original'],data['chinese'])],key='editor-'+row['id'],num_rows='fixed')
         screen=st.data_editor([{'开始':a,'结束':b,'原文':'','中文':t} for a,b,t in data.get('screen',[])],key='screen-'+row['id'],num_rows='fixed') if data.get('screen') else []
         font=st.selectbox('字幕字体',['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'],index=(['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'].index(style['font']) if style['font'] in ['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'] else 0))
@@ -338,7 +339,7 @@ def render_review(row,folder):
         try:
             duration=video_info(source)[2] if source else None
             data['original'],data['chinese']=validate_edit(table,duration)
-            if screen: _,data['screen']=validate_edit(screen,duration)
+            if data.get('screen'): _,data['screen']=validate_edit(screen,duration)
             data['subtitle_style']=subtitle_style({'font':font,'size':size,'x':x,'y':y},w,h)
             atomic_json(folder/'transcript.json',data)
             with db() as c: c.execute('UPDATE videos SET title_zh=? WHERE id=?',(title,row['id']))

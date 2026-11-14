@@ -114,11 +114,26 @@ def encode(folder,report):
             if proc.poll() is None:proc.kill();proc.wait()
     (folder/'result.tmp.mp4').replace(folder/'result.mp4')
 
+def is_blank_cell(value):
+    return value is None or (isinstance(value,str) and not value.strip()) or (isinstance(value,float) and math.isnan(value))
+
+
 def validate_edit(rows,duration=None):
     original=[];chinese=[];previous=0
-    for row in rows:
-        a,b=float(row['开始']),float(row['结束'])
-        if not math.isfinite(a+b) or a<previous or b<=a or (duration and b>duration+.1):raise ValueError('时间轴必须有效、按序且不重叠，不超出视频长度')
-        if not isinstance(row['中文'],str) or not row['中文'].strip():raise ValueError('中文字幕不能为空')
-        original.append([a,b,str(row['原文'])]);chinese.append([a,b,row['中文']]);previous=b
+    for number,row in enumerate(rows,1):
+        # Merged-away captions can retain timestamps: no text means no cue.
+        if is_blank_cell(row.get('原文')) and is_blank_cell(row.get('中文')):
+            continue
+        if is_blank_cell(row.get('开始')) or is_blank_cell(row.get('结束')):
+            raise ValueError(f'第 {number} 行：开始和结束时间不能为空；删除字幕请同时清空原文和中文')
+        try:
+            a,b=float(row['开始']),float(row['结束'])
+        except (TypeError,ValueError):
+            raise ValueError(f'第 {number} 行：开始和结束时间必须是秒数') from None
+        if not math.isfinite(a+b) or a<previous or b<=a or (duration is not None and b>duration+.1):
+            raise ValueError(f'第 {number} 行：时间轴必须有效、按序且不重叠，不超出视频长度；合并字幕后请检查相邻行')
+        if not isinstance(row.get('中文'),str) or not row['中文'].strip():
+            raise ValueError(f'第 {number} 行：中文字幕不能为空；删除字幕请同时清空原文和中文')
+        text='' if is_blank_cell(row.get('原文')) else str(row['原文'])
+        original.append([a,b,text]);chinese.append([a,b,row['中文']]);previous=b
     return original,chinese
