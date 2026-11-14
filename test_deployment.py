@@ -25,6 +25,6 @@ class DeploymentTests(unittest.TestCase):
             base=Path(directory);tools=base/'tools'/'bin';tools.mkdir(parents=True)
             (tools/'ffmpeg.exe').touch();(tools/'ffprobe.exe').touch()
             with patch.object(media_tools,'__file__',str(base/'media_tools.py')):
-                self.assertEqual(media_tools.ffmpeg_path(),str(tools/'ffmpeg.exe'))
+                self.assertTrue(Path(media_tools.ffmpeg_path()).samefile(tools/'ffmpeg.exe'))
 
 if __name__=='__main__': unittest.main()
