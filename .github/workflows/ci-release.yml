@@ -34,14 +34,19 @@ jobs:
           }
       - name: Install FFmpeg
         run: choco install ffmpeg --yes --no-progress
-      - name: Install dependencies
+      - name: Install using the deployment entrypoint
+        shell: pwsh
         run: |
-          python -m pip install -r requirements-local.txt
-          python -m pip check
+          @"
+          TRANSLATE_API_KEY=ci-placeholder
+          TRANSLATE_BASE_URL=https://example.invalid/v1
+          TRANSLATE_MODEL=qwen-mt-flash
+          "@ | Set-Content -Encoding utf8 .env
+          python deploy.py install
       - name: Unit and media integration tests
-        run: python -m unittest discover -p "test_*.py" -v
+        run: .\.venv\Scripts\python.exe -m unittest discover -p "test_*.py" -v
       - name: Web UI smoke test (isolated runner)
-        run: python check_ui.py
+        run: .\.venv\Scripts\python.exe check_ui.py
 
   release:
     if: startsWith(github.ref, 'refs/tags/v')
