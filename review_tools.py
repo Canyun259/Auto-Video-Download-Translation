@@ -36,7 +36,7 @@ def subtitle_style(style,w,h):
     return {'font':font,'size':size,'x':x,'y':y}
 
 
-def fit_ass(path,original,chinese,screen,w,h,style=None):
+def fit_ass(path,original,chinese,screen,w,h,style=None,display="bilingual"):
     style=subtitle_style(style,w,h)
     font=style['size'];margin=max(12,round(w*0.045))
     header=f'''[Script Info]
@@ -59,7 +59,8 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
         size=font
         while True:
             width=max(8,int(min(w-2*margin,2*w*min(style['x'],100-style['x'])/100)/(size*.65)))
-            body=wrap(chinese[index][2],width)+r'\N'+wrap(text,width)
+            body=wrap(chinese[index][2],width)
+            if display!='chinese': body+=r'\N'+wrap(text,width)
             if (body.count(r'\N')+1)*size*1.4<h*.5 or size<=10:break
             size-=1
         lines.append(f'Dialogue: 0,{stamp(a)},{stamp(b)},Speech,,0,0,0,,'+r'{\an2\pos('+str(round(w*style['x']/100))+','+str(round(h*style['y']/100))+r')\fs'+str(size)+'}'+body)
@@ -72,6 +73,7 @@ def export_subtitles(folder,data,video=None):
         video=next(p for p in folder.glob('source.*') if p.suffix in {'.mp4','.mkv','.mov','.webm','.avi','.m4v'})
     w,h,_=video_info(video)
     fit_ass(folder/'bilingual.ass',data['original'],data['chinese'],data.get('screen',[]),w,h,data.get('subtitle_style'))
+    fit_ass(folder/'chinese.ass',data['original'],data['chinese'],data.get('screen',[]),w,h,data.get('subtitle_style'),'chinese')
     app.write_srt(folder/'original.srt',data['original'])
     app.write_srt(folder/'chinese.srt',data['chinese'])
     app.write_srt(folder/'bilingual.srt',[(a,b,data['chinese'][i][2]+'\n'+text) for i,(a,b,text) in enumerate(data['original'])])
@@ -83,7 +85,7 @@ def preview_frame(folder,data,second):
     video=next(p for p in folder.glob('source.*') if p.suffix in {'.mp4','.mkv','.mov','.webm','.avi','.m4v'})
     w,h,duration=video_info(video)
     second=max(0,min(float(second),max(0,duration-.05)))
-    fit_ass(folder/'preview.ass',data['original'],data['chinese'],data.get('screen',[]),w,h,data.get('subtitle_style'))
+    fit_ass(folder/'preview.ass',data['original'],data['chinese'],data.get('screen',[]),w,h,data.get('subtitle_style'),data.get('subtitle_display','bilingual'))
     # Seek after the input so libass sees the original timeline.
     command=[ffmpeg_path(),'-nostdin','-y','-i',video.name,'-vf','ass=preview.ass',
              '-ss',str(second),'-frames:v','1','-update','1','preview.png']
@@ -98,7 +100,8 @@ def encode(folder,report):
     w,h,duration=video_info(video)
     export_subtitles(folder,data,video)
     progress=folder/'encode-progress.txt';progress.write_text('')
-    command=[ffmpeg_path(),'-nostdin','-y','-i',video.name,'-vf','ass=bilingual.ass','-map','0:v:0','-map','0:a?','-c:v','libx264','-crf','20','-c:a','aac','-movflags','+faststart','-progress',progress.name,'-nostats','result.tmp.mp4']
+    ass='chinese.ass' if data.get('subtitle_display')=='chinese' else 'bilingual.ass'
+    command=[ffmpeg_path(),'-nostdin','-y','-i',video.name,'-vf','ass='+ass,'-map','0:v:0','-map','0:a?','-c:v','libx264','-crf','20','-c:a','aac','-movflags','+faststart','-progress',progress.name,'-nostats','result.tmp.mp4']
     with (folder/'ffmpeg.log').open('w') as log:
         proc=subprocess.Popen(command,cwd=folder,stdout=log,stderr=log);started=time.monotonic()
         try:

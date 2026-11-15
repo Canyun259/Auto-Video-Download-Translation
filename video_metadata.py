@@ -2,13 +2,16 @@
 from datetime import datetime, timezone, timedelta
 import threading
 LOCK=threading.Lock()
-COLUMNS={'output_dir':'TEXT','publisher':'TEXT','publisher_url':'TEXT','published_at':'TEXT','title_zh':'TEXT','title_error':'TEXT','progress':'REAL DEFAULT 0'}
+COLUMNS={'output_dir':'TEXT','publisher':'TEXT','publisher_url':'TEXT','published_at':'TEXT','title_zh':'TEXT','title_error':'TEXT','progress':'REAL DEFAULT 0','hidden':'INTEGER NOT NULL DEFAULT 0','deleted_at':'REAL'}
 
 def migrate(c):
     with LOCK:
         columns={r[1] for r in c.execute('PRAGMA table_info(videos)')}
         for name,kind in COLUMNS.items():
             if name not in columns: c.execute(f'ALTER TABLE videos ADD COLUMN {name} {kind}')
+        c.execute('CREATE TABLE IF NOT EXISTS scan_checkpoints(url TEXT PRIMARY KEY,since REAL NOT NULL,completed_at REAL NOT NULL)')
+        c.execute('CREATE INDEX IF NOT EXISTS videos_visible_state ON videos(hidden,state)')
+        c.execute('CREATE INDEX IF NOT EXISTS videos_url ON videos(url)')
         c.commit()
 
 def publication(item):
@@ -24,6 +27,8 @@ def publication(item):
     return None
 
 def save(c,ident,link,item):
+    from library_store import excluded
+    if excluded(c,ident,link): return False
     title=item.get('title') or '视频'
     publisher=item.get('uploader') or item.get('channel') or item.get('uploader_id') or item.get('channel_id')
     publisher_url=item.get('uploader_url') or item.get('channel_url')
@@ -35,3 +40,4 @@ def save(c,ident,link,item):
         title_zh=CASE WHEN videos.title=excluded.title THEN videos.title_zh ELSE NULL END,
         title_error=CASE WHEN videos.title=excluded.title THEN videos.title_error ELSE NULL END,
         title=excluded.title''',(ident,link,title,item.get('thumbnail'),item.get('duration'),publisher,publisher_url,publication(item)))
+    return True
