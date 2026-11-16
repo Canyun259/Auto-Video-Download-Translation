@@ -14,7 +14,7 @@ def ensure_schema(c):
         c.execute('CREATE TABLE IF NOT EXISTS settings(id INTEGER PRIMARY KEY,body TEXT)')
         migrate(c)
         columns={r[1] for r in c.execute('PRAGMA table_info(videos)')}
-        for name,kind in {'output_mode':"TEXT DEFAULT 'burn'",'subtitle_display':"TEXT DEFAULT 'bilingual'",'prefer_subtitles':'INTEGER DEFAULT 1'}.items():
+        for name,kind in {'imported_subtitles':'TEXT','output_mode':"TEXT DEFAULT 'burn'",'subtitle_display':"TEXT DEFAULT 'bilingual'",'prefer_subtitles':'INTEGER DEFAULT 1'}.items():
             if name not in columns: c.execute(f'ALTER TABLE videos ADD COLUMN {name} {kind}')
         c.commit()
         if path: _READY.add(path)

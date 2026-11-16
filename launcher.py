@@ -34,14 +34,13 @@ def port_open():
         s.settimeout(.5);return s.connect_ex(('127.0.0.1',8501))==0
 
 def checks():
-    missing=[m for m in ['streamlit','dotenv','yt_dlp','faster_whisper','cv2','rapidocr','psutil'] if not importlib.util.find_spec(m)]
+    missing=[m for m in ['streamlit','dotenv','yt_dlp','faster_whisper','psutil'] if not importlib.util.find_spec(m)]
     if missing:raise RuntimeError('缺少依赖：'+', '.join(missing)+'。请运行“安装或更新依赖”。')
     from dotenv import dotenv_values
     cfg=dotenv_values(BASE/'.env')
-    if not cfg.get('TRANSLATE_API_KEY'):raise RuntimeError('请先在项目 .env 填写翻译密钥。')
     url=cfg.get('TRANSLATE_BASE_URL','')
-    if not url.startswith('https://') or any(x in url for x in ('YOUR_','{','你的')):raise RuntimeError('翻译接口地址未填写完整，请检查 .env。')
-    if not cfg.get('TRANSLATE_MODEL'):raise RuntimeError('请填写 TRANSLATE_MODEL。')
+    if cfg.get('TRANSLATE_API_KEY') and (not url.startswith('https://') or any(x in url for x in ('YOUR_','{','你的'))):raise RuntimeError('翻译接口地址未填写完整，请检查 .env。')
+    if cfg.get('TRANSLATE_API_KEY') and not cfg.get('TRANSLATE_MODEL'):raise RuntimeError('请填写 TRANSLATE_MODEL。')
     from media_tools import ffmpeg_path
     ff=Path(ffmpeg_path())
     if not ff.is_file() or not ff.with_name('ffprobe.exe').is_file():raise RuntimeError('未找到 FFmpeg/ffprobe，请先安装 FFmpeg。')

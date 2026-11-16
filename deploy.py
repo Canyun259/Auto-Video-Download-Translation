@@ -54,7 +54,7 @@ def doctor():
     from media_tools import ffmpeg_path
     print('Video Translation Console v'+__version__)
     print('Python:',sys.version.split()[0],sys.executable)
-    missing=[m for m in ['streamlit','dotenv','yt_dlp','faster_whisper','cv2','rapidocr','psutil','PIL','tkinter'] if importlib.util.find_spec(m) is None]
+    missing=[m for m in ['streamlit','dotenv','yt_dlp','faster_whisper','psutil','PIL','tkinter'] if importlib.util.find_spec(m) is None]
     if missing: print('Missing modules:',', '.join(missing))
     ff=Path(ffmpeg_path())
     tools=ff.is_file() and ff.with_name('ffprobe.exe').is_file()
@@ -65,9 +65,9 @@ def doctor():
         from dotenv import dotenv_values
         cfg=dotenv_values(BASE/'.env')
         config=bool(cfg.get('TRANSLATE_API_KEY') and str(cfg.get('TRANSLATE_BASE_URL','')).startswith('https://') and cfg.get('TRANSLATE_MODEL'))
-    print('Translation configuration:', 'ready' if config else 'fill in .env (values are never printed)')
+    print('Translation configuration:', 'ready' if config else 'not configured; imported subtitles remain available (values are never printed)')
     if not tools: print('Install FFmpeg: winget install --id Gyan.FFmpeg --exact\nOr place ffmpeg.exe and ffprobe.exe in tools/bin/.')
-    return 1 if missing or not tools or not config else 0
+    return 1 if missing or not tools else 0
 
 
 def update():

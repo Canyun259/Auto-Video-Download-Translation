@@ -6,15 +6,17 @@
 
 在 Windows 本机完成视频下载、语音识别、中文翻译、字幕审核与烧录，通过网页操作。
 
-**当前版本：v1.2.0** · [下载发布版本](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest) · [更新日志](CHANGELOG.md) · [部署与升级](docs/DEPLOYMENT.md)
+**当前版本：v1.3.0** · [下载发布版本](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest) · [更新日志](CHANGELOG.md) · [部署与升级](docs/DEPLOYMENT.md)
 
 ## 能做什么
 
 - 扫描 Instagram（帖子/Reels）、YouTube 频道与视频；可选 X 账号来源。
+- 粘贴单条视频地址导入，无需加入监控账号；失败时显示原因与处理建议。
+- 处理前或审核区导入 SRT / VTT，支持中文及双语字幕；处理前导入可跳过语音识别与翻译。
 - 导入已下载的视频：填写本机路径或上传文件，按内容去重。
 - 生成原文、中文与双语 SRT、ASS 字幕，保留原视频；也可烧录成双语视频。
 - 在审核区修改字幕、时间轴和标题；调整字体、字号和位置，再查看实际烧录截图。
-- 可选画面 OCR、NVIDIA CUDA；默认 CPU 可运行。
+- 可选 NVIDIA CUDA；默认 CPU 可运行。
 - 中文标题、发布者和时间筛选、处理进度、封面保存，以及按平台/账号整理输出目录。
 
 ## 快速部署
@@ -24,7 +26,7 @@
 1. 从 [Releases](https://github.com/Canyun259/Auto-Video-Download-Translation/releases/latest) 下载 ZIP 并解压。
 2. 安装 Python 3.12（包含 Tkinter）、FFmpeg/ffprobe；YouTube 推荐 Node.js LTS。具体命令见 [部署指南](docs/DEPLOYMENT.md)。
 3. 双击 **安装或更新依赖.bat**（或 `install-local.bat`）。自动创建虚拟环境和首次 `.env`，保留已有配置。
-4. 编辑 `.env`，填写 `TRANSLATE_API_KEY`、`TRANSLATE_BASE_URL`、`TRANSLATE_MODEL`。Base URL 使用供应商的 HTTPS OpenAI 兼容接口，不带 `/chat/completions`；默认模型为 `qwen-mt-flash`。
+4. 使用自动翻译时，编辑 `.env`，填写 `TRANSLATE_API_KEY`、`TRANSLATE_BASE_URL`、`TRANSLATE_MODEL`。Base URL 使用供应商的 HTTPS OpenAI 兼容接口，不带 `/chat/completions`；默认模型为 `qwen-mt-flash`。
 5. 运行 `check-local.bat`，通过后双击 **启动视频翻译台.bat**。打开 http://127.0.0.1:8501。
 
 可选：将可信的 `ffmpeg.exe` 和 `ffprobe.exe` 放在项目 `tools/bin/`，无需修改 PATH。
@@ -33,9 +35,15 @@
 
 **本地视频**：展开页面顶部的本地视频导入 → 路径/上传 → 待选择。
 
-**在线视频**：在侧栏填写账号、频道或单条视频 HTTPS 链接 → 保存并检测 → 待选择。YouTube 可分别添加频道 `/videos`、`/shorts`。
+**在线视频**：顶部「通过视频地址导入」可导入单条视频；也可在侧栏填写账号、频道或单条视频 HTTPS 链接 → 保存并检测 → 待选择。YouTube 可分别添加频道 `/videos`、`/shorts`。
 
-选择输出方式后开始处理：
+选择输出方式后开始处理。已有字幕时，将「字幕获取方式」设为「导入现成字幕」，上传 SRT / VTT 后可直接送审或保存，不需要翻译 API 配置。中文模式直接使用全文；双语模式要求每条首行中文、后续行原文。字幕随任务保存，重试无需重新上传；下载后按实际视频时长再次校验，错误不会回退自动翻译。
+
+审核区也可导入替换字幕，原审核稿自动备份，之后可继续编辑与预览。文件支持 UTF-8、GB18030、带 BOM 的 UTF-16，最大 5 MB。
+
+画面文字识别与翻译已移除，历史审核稿中的画面字幕仍可使用。
+
+输出流程：
 
 - **独立字幕**：视频和字幕完成后进入已完成，可下载字幕、返回审核。
 - **烧录字幕**：翻译后进入审核区 → 修改文字/样式 → 选择时间点更新预览 → 确认烧录。
@@ -59,7 +67,7 @@
 - Instagram 登录：从已登录浏览器导出所需平台的 Netscape Cookies 到 `local-data/secrets/cookies.txt`，运行 `import_instagram_cookies.py --username YOUR_USERNAME --check-api current-user`，再在 `.env` 填写对应 `IG_USERNAME`。有安全验证时先回浏览器完成。
 - YouTube 公开内容可先不提供凭证；需要登录时使用上述 Cookies 路径。
 - X 账号扫描需自己的 `X_BEARER_TOKEN` 和 API 权限，不添加来源即可不用。
-- GPU：`install-local.bat --gpu` 安装可选库，网页选择自动/CUDA；硬件和驱动需兼容。OCR 和视频烧录仍使用 CPU。
+- GPU：`install-local.bat --gpu` 安装可选库，网页选择自动/CUDA；硬件和驱动需兼容。视频烧录仍使用 CPU。
 
 ## 限制与数据
 
