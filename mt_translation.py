@@ -2,6 +2,7 @@
 import os
 import time
 import re
+from subtitle_rules import clean_chinese
 
 def translate(cues, post=None, sleep=time.sleep, progress=None):
     if post is None:
@@ -34,7 +35,7 @@ def translate(cues, post=None, sleep=time.sleep, progress=None):
                 cleaned = ' '.join(re.sub(r'<[^>]*>|\{[^}]*\}', '', content).split())
                 if not cleaned:
                     raise ValueError('MT returned no subtitle text')
-                cache[original] = cleaned
+                cache[original] = clean_chinese(cleaned)
                 break
             # Conservative pacing; 429 responses also trigger bounded retries.
             sleep(1.1)

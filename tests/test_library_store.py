@@ -45,8 +45,15 @@ class LibraryTests(unittest.TestCase):
         self.assertTrue(is_new({},100))
         self.assertTrue(is_new({'upload_date':'19700101'},100))
         self.assertFalse(is_new({'upload_date':'19700101'},90000))
+    def test_legacy_automatic_checkpoint_not_used_for_manual_scan(self):
+        with self.connect() as c:
+            c.execute('INSERT INTO scan_checkpoints VALUES(?,?,?)',('a',9999,9999))
+            self.assertIsNone(checkpoint(c,'a'))
+            complete_scan(c,'a',100)
+            self.assertEqual(checkpoint(c,'a'),100)
+            self.assertEqual(c.execute('SELECT since FROM scan_checkpoints WHERE url=?',('a',)).fetchone()[0],9999)
     def test_discovery_success_failure_and_cutoff(self):
-        tree=ast.parse(Path(__file__).with_name('local_ui.py').read_text(encoding='utf-8'))
+        tree=ast.parse((Path(__file__).resolve().parents[1] / 'local_ui.py').read_text(encoding='utf-8'))
         funcs=[n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name in {'discover','entries','valid_url'}]
         ns={'db':self.connect,'urlparse':urlparse,'hashlib':hashlib,'time':time,'opts':lambda:{},'translate_title':lambda ident:None}
         exec(compile(ast.Module(body=funcs,type_ignores=[]),'local_ui.py','exec'),ns)
@@ -55,10 +62,40 @@ class LibraryTests(unittest.TestCase):
         with self.connect() as c: complete_scan(c,url,100)
         loader=MagicMock();loader.__enter__.return_value=loader
         loader.extract_info.return_value={'entries':[item('old',50),item('new',time.time()+10)]}
-        with patch('yt_dlp.YoutubeDL',return_value=loader): ns['discover'](url,20)
+        with patch('yt_dlp.YoutubeDL',return_value=loader) as factory:
+            ns['discover'](url,20,started=200)
+            self.assertEqual(factory.call_args.args[0]['extract_flat'],'in_playlist')
         with self.connect() as c:
             self.assertEqual(c.execute('SELECT title FROM videos').fetchone()[0],'new')
-            before=checkpoint(c,url);self.assertGreater(before,100)
+            before=checkpoint(c,url);self.assertEqual(before,200)
+        # Flat uploads reuse the channel header without fetching each video.
+        channel_id = 'UC1234567890123456789012'
+        loader.extract_info.return_value = {
+            'id':channel_id, 'channel_id':channel_id, 'channel':'Test channel',
+            'uploader_url':'https://www.youtube.com/@test',
+            'entries': [
+                {'id':'new','ie_key':'Youtube','url':'https://www.youtube.com/watch?v=new','title':'new',
+                 'thumbnails':[{'url':'https://example.com/thumb.jpg'}]},
+                {'id':'older','ie_key':'Youtube','url':'https://www.youtube.com/watch?v=older',
+                 'title':'Test title','timestamp':50},
+            ],
+        }
+        older_id = hashlib.sha256(b'Youtube:older').hexdigest()[:24]
+        with self.connect() as c:
+            save(c, older_id, 'https://www.youtube.com/watch?v=older', {'title':'Original title'})
+            c.execute("UPDATE videos SET title_zh='已有译名' WHERE id=?", (older_id,))
+        loader.extract_info.reset_mock()
+        with patch('yt_dlp.YoutubeDL',return_value=loader): ns['discover'](url,20)
+        loader.extract_info.assert_called_once_with(url,download=False)
+        with self.connect() as c:
+            self.assertEqual(c.execute('SELECT count(*) FROM videos').fetchone()[0],2)
+            known=c.execute("SELECT thumb,publisher,published_at FROM videos WHERE title='new'").fetchone()
+            self.assertEqual(known['thumb'],'https://example.com/thumb.jpg')
+            self.assertEqual(known['publisher'],'Test channel')
+            self.assertIsNotNone(known['published_at'])
+            older=c.execute('SELECT title_zh,publisher,published_at FROM videos WHERE id=?',(older_id,)).fetchone()
+            self.assertEqual(tuple(older), ('已有译名','Test channel','1970-01-01 08:00:50 北京时间'))
+            before=checkpoint(c,url)
         loader.extract_info.side_effect=RuntimeError('network down')
         with patch('yt_dlp.YoutubeDL',return_value=loader),self.assertRaises(RuntimeError): ns['discover'](url,20)
         with self.connect() as c: self.assertEqual(checkpoint(c,url),before)

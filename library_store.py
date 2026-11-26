@@ -10,12 +10,16 @@ def dismiss(c,ident):
 
 
 def checkpoint(c,url):
-    row=c.execute('SELECT since FROM scan_checkpoints WHERE url=?',(url,)).fetchone()
+    row=c.execute('SELECT since FROM manual_scan_checkpoints WHERE url=?',(url,)).fetchone()
     return row[0] if row else None
 
 
 def complete_scan(c,url,started):
-    c.execute('INSERT INTO scan_checkpoints(url,since,completed_at) VALUES(?,?,?) ON CONFLICT(url) DO UPDATE SET since=MAX(scan_checkpoints.since,excluded.since),completed_at=excluded.completed_at',(url,started,time.time()))
+    c.execute('INSERT INTO manual_scan_checkpoints(url,since,completed_at) VALUES(?,?,?) ON CONFLICT(url) DO UPDATE SET since=MAX(manual_scan_checkpoints.since,excluded.since),completed_at=excluded.completed_at',(url,started,time.time()))
+
+
+def manual_history(c):
+    return c.execute('SELECT url,since FROM manual_scan_checkpoints ORDER BY since DESC').fetchall()
 
 
 def is_new(item,since):

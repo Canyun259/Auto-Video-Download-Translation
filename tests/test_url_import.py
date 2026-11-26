@@ -34,9 +34,11 @@ class URLImportTests(unittest.TestCase):
         ident, created = self.run_import()
         self.assertTrue(created)
         self.assertEqual(self.c.execute('SELECT state,title FROM videos').fetchone(), ('waiting', 'Test'))
-        self.c.execute("UPDATE videos SET state='done'")
+        self.c.execute("UPDATE videos SET state='done',published_at=NULL,title_zh='译名'")
+        self.extract.return_value['uploader']='Existing creator'
         self.assertEqual(self.run_import(), (ident, False))
-        self.assertEqual(self.c.execute('SELECT state FROM videos').fetchone()[0], 'done')
+        self.assertEqual(self.c.execute('SELECT state,publisher,published_at,title_zh FROM videos').fetchone(),
+                         ('done','Existing creator','2020-01-01（平台仅提供日期）','译名'))
         self.assertEqual(self.c.execute('SELECT since FROM scan_checkpoints').fetchone()[0], 9999999999)
         options = self.downloader.call_args.args[0]
         self.assertTrue(options['noplaylist'])
@@ -69,7 +71,7 @@ class URLImportTests(unittest.TestCase):
 
 class URLImportUITests(unittest.TestCase):
     def test_success_duplicate_and_persistent_failure(self):
-        tree = ast.parse(Path('local_ui.py').read_text(encoding='utf-8'))
+        tree = ast.parse((Path(__file__).resolve().parents[1] / 'local_ui.py').read_text(encoding='utf-8'))
         function = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'render_url_import')
         script = 'import streamlit as st\ndef db(): pass\ndef opts(): return {}\n' + ast.unparse(function) + '\nrender_url_import()'
         page = AppTest.from_string(script).run()

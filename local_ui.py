@@ -14,13 +14,14 @@ importlib.invalidate_caches()
 # Streamlit reruns this file but can retain helpers imported before an update.
 import review_tools
 if not all(hasattr(review_tools, name) for name in
-           ('subtitle_style', 'preview_frame', 'export_subtitles', 'is_blank_cell')):
+           ('subtitle_style', 'preview_frame', 'export_subtitles', 'is_blank_cell', 'ass_color')):
     importlib.reload(review_tools)
 load_dotenv(BASE / '.env')
 DATA = BASE / 'local-data'
 DATA.mkdir(exist_ok=True)
 os.environ.setdefault('HF_HOME', str(DATA/'models'/'huggingface'))
 import subtitle_core as app
+app.ROOT = DATA
 
 def db():
     from database_setup import ManagedConnection
@@ -33,7 +34,7 @@ def db():
 def settings():
     with db() as c:
         row = c.execute('SELECT body FROM settings WHERE id=1').fetchone()
-    return json.loads(row[0]) if row else {'sources': [], 'interval':900,'limit':20,'model':'small'}
+    return json.loads(row[0]) if row else {'sources': [], 'limit':20,'model':'small'}
 
 def update(ident, state, error=''):
     with db() as c:
@@ -44,7 +45,7 @@ def set_progress(ident,value):
 
 def opts():
     from media_tools import download_options
-    o = {'quiet':True,'socket_timeout':30,'retries':2,'ignoreerrors':False}
+    o = {'_youtube_guard_path':str(DATA/'youtube-cooldown.json'),'quiet':True,'socket_timeout':30,'retries':2,'ignoreerrors':False}
     o.update(download_options())
     from network_proxy import media_proxy
     proxy=media_proxy(settings().get('proxy',''))
@@ -63,11 +64,13 @@ def entries(info):
             if item: yield from entries(item)
     else: yield info
 
-def discover(url, limit):
-    from yt_dlp import YoutubeDL
+def discover(url, limit, started=None):
+    from youtube_guard import download_session,is_youtube
     if not valid_url(url): raise ValueError('仅支持 X、Instagram 和 YouTube 的 HTTPS 链接')
     from library_store import checkpoint,is_new,excluded,complete_scan
-    started=time.time()
+    from video_metadata import save, update_publication, youtube_channel_publisher
+    youtube = is_youtube(url)
+    started=time.time() if started is None else started
     with db() as c: since=checkpoint(c,url)
     parsed=urlparse(url); parts=parsed.path.strip('/').split('/')
     urls=[url]
@@ -102,22 +105,30 @@ def discover(url, limit):
             raise RuntimeError('Instagram 未能读取帖子或 Reels：'+'；'.join(section_errors))
     for source in urls:
         def match_new(item,*,incomplete=False):
-            if not is_new(item,since): return '早于上次成功检测时间'
+            # Existing YouTube entries can be enriched before applying the cutoff to new entries.
+            if not youtube and not is_new(item,since): return '早于上次成功检测时间'
             link=item.get('webpage_url') or item.get('original_url')
             with db() as c:
                 if link and excluded(c,url=link): return '已手动删除，跳过'
             return None
-        with YoutubeDL({**opts(),'playlistend':limit,'lazy_playlist':True,'extract_flat':False,'skip_download':True,'match_filter':match_new}) as y:
+        with download_session(source,{**opts(),'playlistend':limit,'lazy_playlist':True,'extract_flat':'in_playlist' if youtube else False,'skip_download':True,'match_filter':match_new}) as y:
             info=y.extract_info(source,download=False)
             if not info: continue
+            channel_publisher = youtube_channel_publisher(source, info) if youtube else (None, None)
             for item in entries(info):
-                if item.get('is_live') or not is_new(item,since): continue
-                link=item.get('webpage_url') or item.get('original_url')
+                if item.get('is_live') or item.get('live_status') in {'is_live','is_upcoming'}: continue
+                link=item.get('webpage_url') or item.get('original_url') or (item.get('url') if youtube else None)
                 if not link: continue
+                if youtube:
+                    item=dict(item)
+                    item['extractor_key']=item.get('extractor_key') or item.get('ie_key') or 'Youtube'
                 ident=hashlib.sha256((str(item.get('extractor_key'))+':'+str(item.get('id'))).encode()).hexdigest()[:24]
                 with db() as c:
-                    from video_metadata import save
-                    stored=save(c,ident,link,item)
+                    if not is_new(item,since):
+                        if youtube:
+                            update_publication(c, ident, item, channel_publisher)
+                        continue
+                    stored=save(c,ident,link,item,channel_publisher=channel_publisher)
                 if stored: translate_title(ident)
     with db() as c: complete_scan(c,url,started)
 
@@ -163,13 +174,31 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     path.write_text(header+'\n'.join(lines),encoding='utf-8')
 
 def process(row, model_name, device_mode='auto'):
-    from yt_dlp import YoutubeDL
+    from youtube_guard import download_session, extract_video
+    from video_metadata import update_publication
     folder=output_folder(DATA,row,create=True)
     imported=json.loads(row['imported_subtitles']) if row['imported_subtitles'] else None
-    if not row['url'].startswith('local://'):
+    is_local = row['url'].startswith('local://')
+    cover_url = row['thumb']
+    media_proxy = None
+    if not is_local:
         update(row['id'],'下载中')
-        with YoutubeDL({**opts(),'outtmpl':str(folder/'source.%(ext)s'),'format':'bv*+ba/b','merge_output_format':'mp4','noplaylist':True,'writesubtitles':False,'writeautomaticsub':False,'progress_hooks':[lambda d:set_progress(row['id'],d.get('downloaded_bytes',0)/(d.get('total_bytes') or d.get('total_bytes_estimate') or 1))]}) as y:
-            downloaded_info=y.extract_info(row['url'],download=True)
+        options = opts()
+        media_proxy = options.get('proxy')
+        downloaded_info = extract_video(
+            row['url'],
+            {**options, 'outtmpl': str(folder/'source.%(ext)s'), 'format': 'bv*+ba/b',
+             'merge_output_format': 'mp4', 'noplaylist': True, 'continuedl': True,
+             'writesubtitles': False, 'writeautomaticsub': False,
+             'progress_hooks': [lambda d: set_progress(
+                 row['id'], d.get('downloaded_bytes',0)/(d.get('total_bytes') or d.get('total_bytes_estimate') or 1)
+             )]},
+            download=True,
+        )
+        with db() as c:
+            metadata = update_publication(c, row['id'], downloaded_info)
+        if metadata:
+            cover_url = metadata[3]
         # Preserve at most one manual platform subtitle, without blocking the video.
         available=downloaded_info.get('subtitles') or {}
         languages=[k for k in available if k != 'live_chat']
@@ -182,7 +211,7 @@ def process(row, model_name, device_mode='auto'):
             language=downloaded_info.get('language')
             selected=language if language in languages else languages[0]
             try:
-                with YoutubeDL({**opts(),'outtmpl':str(folder/'source.%(ext)s'),'skip_download':True,'writesubtitles':not automatic,'writeautomaticsub':automatic,'subtitleslangs':[selected],'subtitlesformat':'srt/best','retries':0}) as y:
+                with download_session(row['url'],{**opts(),'outtmpl':str(folder/'source.%(ext)s'),'skip_download':True,'writesubtitles':not automatic,'writeautomaticsub':automatic,'subtitleslangs':[selected],'subtitlesformat':'srt/best','retries':0}) as y:
                     y.process_ie_result(downloaded_info,download=True)
             except Exception as exc:
                 from media_tools import safe_error
@@ -227,7 +256,7 @@ def process(row, model_name, device_mode='auto'):
         from review_tools import export_subtitles
         export_subtitles(folder,json.loads((folder/'transcript.json').read_text(encoding='utf-8')),video)
         from cover_tools import save_cover
-        save_cover(folder,row['thumb'])
+        save_cover(folder, cover_url, from_local_video=is_local, proxy=media_proxy)
         update(row['id'],'done')
     else:
         update(row['id'],'review')
@@ -235,38 +264,58 @@ def process(row, model_name, device_mode='auto'):
 class Runtime:
     def __init__(self):
         self.errors=[]; self.scan=threading.Event()
+        self.scan_lock=threading.Lock()
+        self.scan_requested_at=None
         self.scan_status={'state':'idle'}
         with db() as c:
             c.execute("UPDATE videos SET state='failed',error='程序中断，请手动重试' WHERE state NOT IN ('waiting','queued','done','failed','review','burn_queued')")
         threading.Thread(target=self.poll,daemon=True).start()
         threading.Thread(target=self.worker,daemon=True).start()
     def request_scan(self):
-        if self.scan_status['state'] != 'running':
+        with self.scan_lock:
+            if self.scan_status['state'] in {'queued','running'} or self.scan.is_set():
+                return False
+            self.scan_requested_at=time.time()
+            self.scan_status={'state':'queued','started':self.scan_requested_at}
             self.scan.set()
+            return True
 
     def poll(self):
+        # No timeout: startup, saving settings and elapsed time never start a scan.
         while True:
-            cfg=settings()
-            ig_blocked=False
-            sources=cfg['sources']
-            failures=0
-            for index,url in enumerate(sources,1):
-                self.scan_status={'state':'running','url':url,'index':index,'total':len(sources)}
-                prefix=url+'：'
-                self.errors=[error for error in self.errors if not error.startswith(prefix)]
-                if ig_blocked and 'instagram.com' in (urlparse(url).hostname or ''):
-                    failures+=1
-                    self.errors.append(prefix+'本轮暂停：Instagram 登录会话触发风控，请先在浏览器处理验证')
-                    continue
-                try: discover(url,cfg['limit'])
-                except Exception as exc:
-                    from media_tools import safe_error
-                    failures+=1
-                    self.errors.append(prefix+safe_error(exc))
-                    if 'instagram.com' in (urlparse(url).hostname or '') and 'feedback_required' in str(exc): ig_blocked=True
-            self.errors=[error for error in self.errors if any(error.startswith(url+'：') for url in cfg['sources'])][-30:]
-            self.scan_status={'state':'done','total':len(sources),'failures':failures,'finished':time.strftime('%H:%M:%S')}
-            self.scan.wait(cfg['interval']); self.scan.clear()
+            self.scan.wait()
+            with self.scan_lock:
+                self.scan.clear()
+                started=self.scan_requested_at
+                self.scan_status={'state':'running','url':'','index':0,'total':0}
+            try:
+                self.run_scan(started)
+            except Exception as exc:
+                from media_tools import safe_error
+                self.errors.append('手动检测失败：'+safe_error(exc))
+                self.scan_status={'state':'error','started':started}
+
+    def run_scan(self,started):
+        cfg=settings()
+        ig_blocked=False
+        sources=cfg['sources']
+        failures=0
+        for index,url in enumerate(sources,1):
+            self.scan_status={'state':'running','url':url,'index':index,'total':len(sources)}
+            prefix=url+'：'
+            self.errors=[error for error in self.errors if not error.startswith(prefix)]
+            if ig_blocked and 'instagram.com' in (urlparse(url).hostname or ''):
+                failures+=1
+                self.errors.append(prefix+'本轮暂停：Instagram 登录会话触发风控，请先在浏览器处理验证')
+                continue
+            try: discover(url,cfg['limit'],started)
+            except Exception as exc:
+                from media_tools import safe_error
+                failures+=1
+                self.errors.append(prefix+safe_error(exc))
+                if 'instagram.com' in (urlparse(url).hostname or '') and 'feedback_required' in str(exc): ig_blocked=True
+        self.errors=[error for error in self.errors if any(error.startswith(url+'：') for url in cfg['sources'])][-30:]
+        self.scan_status={'state':'done','total':len(sources),'failures':failures,'finished':time.strftime('%H:%M:%S'),'started':started}
     def worker(self):
         while True:
             with db() as c:
@@ -278,7 +327,9 @@ class Runtime:
                         update(row['id'],'字幕烧录中')
                         from cover_tools import save_cover
                         folder=output_folder(DATA,row)
-                        save_cover(folder,row['thumb'])
+                        is_local = row['url'].startswith('local://')
+                        save_cover(folder, row['thumb'], from_local_video=is_local,
+                                   proxy=None if is_local else opts().get('proxy'))
                         encode(folder,lambda value: set_progress(row['id'],value))
                         update(row['id'],'done')
                     else: process(row,settings()['model'],settings().get('device','auto'))
@@ -292,13 +343,16 @@ def runtime(): return Runtime()
 
 @st.fragment(run_every=1)
 def render_scan_status(rt):
+    from youtube_guard import remaining,cooldown_message
+    seconds=remaining(DATA/'youtube-cooldown.json')
+    if seconds: st.warning(cooldown_message(seconds))
     status=rt.scan_status
     if status['state']=='running':
         parsed=urlparse(status['url'])
         account=parsed.path.strip('/') or parsed.hostname
         st.info(f"正在检测：{account}（{status['index']}/{status['total']}）")
         st.caption(status['url'])
-    elif rt.scan.is_set():
+    elif status['state']=='queued' or rt.scan.is_set():
         st.info('正在准备检测…')
     elif status['state']=='done':
         if not status['total']:
@@ -307,32 +361,41 @@ def render_scan_status(rt):
             st.warning(f"检测结束：共 {status['total']} 个来源，{status['failures']} 个失败或暂停。请查看下方错误详情。")
         else:
             st.success(f"检测完成：共 {status['total']} 个来源（{status['finished']}），视频列表已更新。")
+    elif status['state']=='error':
+        st.error('本次手动检测未完成，请查看下方错误详情后重试。')
     else:
-        st.caption('等待检测')
+        st.caption('等待手动检测，不会自动扫描')
+    from library_store import manual_history
+    from datetime import datetime,timedelta
+    with db() as c: history=manual_history(c)
+    if history:
+        with st.expander('上次成功手动检测时间'):
+            for url,stamp in history:
+                when=datetime.fromtimestamp(stamp,timezone(timedelta(hours=8))).strftime('%Y-%m-%d %H:%M:%S')
+                st.caption(url+'：'+when+' 北京时间')
 
 
 def main():
-    st.set_page_config(page_title='本地视频翻译台',layout='wide')
     from version import __version__
+    st.set_page_config(page_title='本地视频翻译台',layout='wide')
     st.title('本地视频翻译台')
     st.caption('版本 v'+__version__)
     st.caption('发现视频 → 自动翻译 → 保存独立字幕，或审核预览后烧录')
     rt=runtime(); cfg=settings()
     with st.sidebar:
-        st.header('监控设置')
+        st.header('检测设置')
         with st.form('settings'):
             sources=st.text_area('账号、频道或单条视频链接（每行一个）','\n'.join(cfg['sources']))
-            interval=st.number_input('检测间隔（秒）',60,86400,cfg['interval'])
             limit=st.number_input('每个入口扫描数量',1,500,cfg['limit'])
-            st.caption('按每个来源上次成功检测的时间增量入库；失败不会推进时间。日期不精确时保留当天视频，以免遗漏。')
+            st.caption('仅点击「手动检测」时扫描。每个来源以上次成功手动检测的开始时间为起点；失败不推进时间。首次手动检测按扫描数量读取，旧的自动检测时间不参与过滤。')
             model=st.selectbox('识别模型',['small','medium','large-v3'],index=['small','medium','large-v3'].index(cfg['model']))
             device=st.selectbox('语音识别设备', ['auto','cuda','cpu'], index=['auto','cuda','cpu'].index(cfg.get('device','auto')), format_func=lambda x: {'auto':'自动（优先 CUDA）','cuda':'CUDA（缺少依赖时报错）','cpu':'CPU'}[x])
             from gpu_support import cuda_status
             ready, reason = cuda_status()
             st.caption(('CUDA 可用：' if ready else '当前自动模式使用 CPU：') + reason)
             proxy=st.text_input('视频检测与下载代理',cfg.get('proxy',''),placeholder='留空自动使用系统代理，例如 http://127.0.0.1:7897')
-            st.caption('留空跟随系统代理；修改后点击保存并检测。请保持代理软件运行。')
-            save=st.form_submit_button('保存并检测')
+            st.caption('留空跟随系统代理；修改后点击保存设置，再手动检测。请保持代理软件运行。')
+            save=st.form_submit_button('保存设置')
         if save:
             urls=[s.strip() for s in sources.splitlines() if s.strip()]
             from network_proxy import validate_proxy
@@ -342,11 +405,13 @@ def main():
             if proxy_error: st.error(proxy_error)
             elif not all(valid_url(u) for u in urls): st.error('请使用支持平台的 HTTPS 链接')
             else:
-                with db() as c: c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps({'sources':urls,'interval':interval,'limit':limit,'model':model,'device':device,'proxy':proxy.strip()}),))
-                rt.request_scan(); st.success('已保存')
-        if st.button('立即检测'): rt.request_scan()
+                with db() as c: c.execute('INSERT OR REPLACE INTO settings VALUES(1,?)',(json.dumps({'sources':urls,'limit':limit,'model':model,'device':device,'proxy':proxy.strip()}),))
+                st.success('设置已保存，点击「手动检测」开始扫描。')
+        if st.button('手动检测',disabled=rt.scan_status['state'] in {'queued','running'}):
+            rt.request_scan()
         render_scan_status(rt)
         st.caption('输出目录：'+str(DATA/'output'))
+        st.caption('YouTube 检测只读取频道列表，减少逐视频请求；触发限流后统一暂停 1 小时，重启也会保留暂停时间。')
         st.caption('扫描后自动翻译标题并缓存；仅翻译标题不会下载或翻译视频。标题翻译会使用少量 API 额度。')
         if rt.errors:
             st.caption('来源恢复成功后会自动清除对应错误；Instagram 风控需要先在浏览器处理。')
@@ -369,7 +434,7 @@ def render_url_import():
                 with st.spinner('正在解析视频地址…'):
                     ident, created = import_url(db, source, opts())
                 st.session_state['url-import-result'] = ('success' if created else 'info',
-                    '视频已导入「待选择」。选择处理后将下载视频并生成字幕。' if created else '该视频已在视频库中，无需重复导入；请在对应分区查看。')
+                    '视频已导入「待选择」。选择处理后将下载视频并生成字幕。' if created else '该视频已在视频库中，无需重复导入。已检查发布信息，可在对应分区查看。')
                 if created:
                     st.session_state['library-section'] = '待选择'
                     st.session_state['library-page-待选择'] = 1
@@ -488,10 +553,33 @@ def render_review(row,folder):
         table=st.data_editor([{'开始':a[0],'结束':a[1],'原文':a[2],'中文':b[2]} for a,b in zip(data['original'],data['chinese'])],key='editor-'+row['id']+'-'+revision,num_rows='fixed')
         screen=st.data_editor([{'开始':a,'结束':b,'原文':'','中文':t} for a,b,t in data.get('screen',[])],key='screen-'+row['id'],num_rows='fixed') if data.get('screen') else []
         display=st.radio('字幕显示',['bilingual','chinese'],index=1 if data.get('subtitle_display')=='chinese' else 0,format_func=lambda v: '只显示中文字幕' if v=='chinese' else '中文＋原文双语字幕',key='review-display-'+row['id']+'-'+revision)
-        font=st.selectbox('字幕字体',['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'],index=(['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'].index(style['font']) if style['font'] in ['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial'] else 0))
-        size=st.number_input('字幕字号（原视频像素）',10,200,style['size'])
-        x=st.slider('水平位置（%）',5,95,int(style['x']))
-        y=st.slider('垂直位置（%）',5,95,int(style['y']))
+        with st.expander('字幕个性化设置',expanded=True):
+            st.caption('样式随当前视频保存，预览、ASS 字幕文件和最终烧录使用同一套设置。SRT 文件只保留文字和时间轴。')
+            fonts=['Microsoft YaHei','SimHei','SimSun','KaiTi','Arial']
+            if style['font'] not in fonts: fonts.append(style['font'])
+            font=st.selectbox('字幕字体',fonts,index=fonts.index(style['font']))
+            size=st.number_input('字幕字号（原视频像素）',10,200,style['size'])
+            left,right=st.columns(2)
+            with left:
+                chinese_color=st.color_picker('中文字幕颜色',style['chinese_color'])
+                bold=st.checkbox('粗体',style['bold'])
+            with right:
+                original_color=st.color_picker('原文字幕颜色',style['original_color'])
+                italic=st.checkbox('斜体',style['italic'])
+            order=st.selectbox('双语上下顺序',['chinese_first','original_first'],index=0 if style['order']=='chinese_first' else 1,
+                               format_func=lambda v:'中文在上，原文在下' if v=='chinese_first' else '原文在上，中文在下')
+            box=st.checkbox('使用半透明背景框',style['box'])
+            outline_color=st.color_picker('描边 / 背景框颜色',style['outline_color'])
+            outline=st.slider('描边粗细 / 背景框边距（像素）',0.,10.,float(style['outline']),.5)
+            box_opacity=st.slider('背景框不透明度（%，开启背景框时生效）',0,100,int(style['box_opacity']))
+            shadow=st.slider('阴影距离（像素）',0.,10.,float(style['shadow']),.5)
+            st.caption('开启背景框后，描边改为背景框；不透明度越低越透明。')
+            if data.get('screen'):
+                screen_color=st.color_picker('历史画面文字译文颜色',style['screen_color'])
+            else:
+                screen_color=style['screen_color']
+            x=st.slider('水平位置（%）',5,95,int(style['x']))
+            y=st.slider('垂直位置（%）',5,95,int(style['y']))
         second=st.number_input('预览时间（秒）',min_value=0.,max_value=max(0.,(duration or 1)-.05),value=min(float(data['original'][0][0])+.1,max(0.,(duration or 1)-.05)) if data['original'] else 0.,step=.1)
         preview=st.form_submit_button('更新字幕预览')
         save=st.form_submit_button('保存修改')
@@ -503,7 +591,7 @@ def render_review(row,folder):
             data['original'],data['chinese']=validate_edit(table,duration)
             if data.get('screen'): _,data['screen']=validate_edit(screen,duration)
             data['subtitle_display']=display
-            data['subtitle_style']=subtitle_style({'font':font,'size':size,'x':x,'y':y},w,h)
+            data['subtitle_style']=subtitle_style({'font':font,'size':size,'x':x,'y':y,'chinese_color':chinese_color,'original_color':original_color,'screen_color':screen_color,'outline_color':outline_color,'outline':outline,'shadow':shadow,'box':box,'box_opacity':box_opacity,'bold':bold,'italic':italic,'order':order},w,h)
             atomic_json(folder/'transcript.json',data)
             with db() as c: c.execute('UPDATE videos SET title_zh=? WHERE id=?',(title,row['id']))
             if preview:
@@ -512,6 +600,10 @@ def render_review(row,folder):
                 st.success('预览已更新，使用当前保存的字幕和样式。')
             elif files:
                 export_subtitles(folder,data,source)
+                from cover_tools import save_cover
+                is_local = row['url'].startswith('local://')
+                save_cover(folder, row['thumb'], from_local_video=is_local,
+                           proxy=None if is_local else opts().get('proxy'))
                 with db() as c: c.execute("UPDATE videos SET output_mode='files' WHERE id=?",(row['id'],))
                 update(row['id'],'done');st.rerun()
             elif approve:
@@ -571,6 +663,9 @@ def show_library():
     states=sections[section]
     subset=[r for r in rows if r['state'] in states]
     st.caption(f'共 {len(subset)} 个视频；每页最多显示 12 个，详情按需加载。')
+    notice = st.session_state.pop('publication-notice', None)
+    if notice:
+        st.info(notice)
     if not subset:
         st.info('暂无视频')
         return
@@ -597,8 +692,12 @@ def show_library():
                     if r['state'] in {'waiting','review','done'}: st.image(r['thumb'],width=100)
                     else: st.image(r['thumb'],use_container_width=True)
             with body:
+                local = r['url'].startswith('local://')
                 st.subheader(r['title_zh'] or r['title'])
-                st.caption('发布时间：'+(r['published_at'] or '平台未提供或尚未获取'))
+                if local:
+                    st.caption('本地导入 · 未关联平台发布时间')
+                else:
+                    st.caption('发布时间：'+(r['published_at'] or '暂未获取，可展开详情补查'))
                 if r['state'] in {'waiting','review','done'}:
                     if st.button('从列表删除' if r['state']=='done' else '删除视频',key='delete-'+r['id'],help='移出界面并阻止重新入库，本地文件保留'):
                         from library_store import dismiss
@@ -606,9 +705,30 @@ def show_library():
                         st.rerun()
                 if st.checkbox('展开审核与字幕设置' if r['state']=='review' else '展开成品与字幕下载' if r['state']=='done' else '展开视频详情与处理选项',key='details-'+r['id']):
                     st.text('原标题：'+r['title'])
-                    st.text('发布账号：'+(r['publisher'] or '暂未获取，重新检测后补齐'))
+                    st.text('发布账号：'+(r['publisher'] or '暂未获取'))
                     if r['publisher_url'] and urlparse(r['publisher_url']).scheme in {'http','https'}:
                         st.link_button('发布账号主页',r['publisher_url'])
+                    if not local and (not r['publisher'] or not r['published_at']):
+                        if st.button('补全发布信息', key='publication-'+r['id'],
+                                     help='只查询当前视频的发布者和发布时间'):
+                            from url_import import fetch_video_info, import_error
+                            from video_metadata import update_publication
+                            try:
+                                with st.spinner('正在查询这条视频的发布信息…'):
+                                    item = fetch_video_info(r['url'], opts())
+                                    with db() as c:
+                                        details = update_publication(c, r['id'], item)
+                            except Exception as exc:
+                                st.error(import_error(exc, '补全发布信息'))
+                            else:
+                                if details is None:
+                                    message = '该视频已移出列表。'
+                                else:
+                                    missing = [label for value, label in
+                                               ((details[0], '发布者'), (details[2], '发布时间')) if not value]
+                                    message = '已补全发布信息。' if not missing else '本次未查到'+'、'.join(missing)+'，已保存查到的信息。'
+                                st.session_state['publication-notice'] = message
+                                st.rerun()
                     if not r['title_zh']:
                         st.caption('中文标题：'+('翻译失败（'+r['title_error']+'）' if r['title_error'] else '待翻译'))
                         if st.button('翻译标题',key='title-'+r['id']):
@@ -643,15 +763,22 @@ def show_library():
                         for name in ['original.srt','chinese.srt','bilingual.srt','bilingual.ass','chinese.ass','screen-chinese.srt']:
                             path=folder/name
                             if path.exists(): st.download_button('下载 '+name,path.read_bytes(),file_name=name,key='download-'+r['id']+name)
-                        if (folder/'cover.jpg').exists():
-                            st.caption('封面已保存：'+str(folder/'cover.jpg'))
+                        cover = folder/'cover.jpg'
+                        if cover.is_file():
+                            if local:
+                                st.image(str(cover), caption='从原视频取帧的封面', width=160)
+                            st.download_button('下载封面', cover.read_bytes(), file_name='cover.jpg',
+                                               mime='image/jpeg', key='cover-download-'+r['id'])
                         else:
-                            if (folder/'cover-warning.txt').exists():
-                                st.warning((folder/'cover-warning.txt').read_text(encoding='utf-8'))
-                            if st.button('保存/重试封面',key='cover-'+r['id']):
+                            if st.button('获取封面', key='cover-'+r['id']):
                                 from cover_tools import save_cover
-                                with st.spinner('正在保存封面…'): save_cover(folder,r['thumb'])
-                                st.rerun()
+                                with st.spinner('正在获取封面…'):
+                                    if save_cover(folder, r['thumb'], from_local_video=local,
+                                                  proxy=None if local else opts().get('proxy')):
+                                        st.rerun()
+                            warning = folder/'cover-warning.txt'
+                            if warning.is_file():
+                                st.warning(warning.read_text(encoding='utf-8'))
                         if (folder/'subtitle-warning.txt').exists(): st.warning('平台附带字幕未获取成功，将尝试读取内嵌字幕，无可用字幕时使用语音识别。')
                         with st.expander('原文 / 中文字幕'):
                             data=json.loads((folder/'transcript.json').read_text(encoding='utf-8'))

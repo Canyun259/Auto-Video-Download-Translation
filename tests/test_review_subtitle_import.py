@@ -58,7 +58,7 @@ class SubtitleImportTests(unittest.TestCase):
         self.assertEqual(list(self.folder.glob('transcript-before-import-*')), [])
 
     def test_review_ui_import_refresh_and_error(self):
-        tree = ast.parse(Path('local_ui.py').read_text(encoding='utf-8'))
+        tree = ast.parse((Path(__file__).resolve().parents[1] / 'local_ui.py').read_text(encoding='utf-8'))
         functions = [ast.unparse(n) for n in tree.body if isinstance(n, ast.FunctionDef) and n.name in {'render_subtitle_import', 'render_review'}]
         script = ('import streamlit as st\nimport json,hashlib\nfrom pathlib import Path\n'+ '\n'.join(functions)
                   + '\nrender_review({"id":"test", "title":"Video", "title_zh":""}, Path('+repr(str(self.folder))+'))')

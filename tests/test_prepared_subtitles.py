@@ -22,10 +22,16 @@ class PreparedSubtitleTests(unittest.TestCase):
         self.row={'id':'test','url':'local://test','imported_subtitles':self.payload,'prefer_subtitles':1,
                   'ocr':1,'output_mode':'burn','thumb':None,'subtitle_display':'bilingual'}
         (self.folder/'source.mp4').write_bytes(b'placeholder')
-        tree=ast.parse(Path('local_ui.py').read_text(encoding='utf-8'))
+        db_path = self.folder/'download-metadata.sqlite'
+        self.connect = lambda: sqlite3.connect(db_path, factory=ManagedConnection)
+        with self.connect() as c:
+            ensure_schema(c)
+            c.execute("INSERT INTO videos(id,url,title) VALUES('test','https://youtu.be/test','Title')")
+        tree=ast.parse((Path(__file__).resolve().parents[1] / 'local_ui.py').read_text(encoding='utf-8'))
         self.functions={n.name:ast.unparse(n) for n in tree.body if isinstance(n,ast.FunctionDef)}
         self.env={'json':json,'DATA':self.folder,'output_folder':Mock(return_value=self.folder),
-                  'update':Mock(),'set_progress':Mock(),'opts':lambda:{},'app':Mock(),'screen_cues':Mock()}
+                  'update':Mock(),'set_progress':Mock(),'opts':lambda:{},'app':Mock(),'screen_cues':Mock(),
+                  'db':self.connect}
         exec(self.functions['process'],self.env)
 
     def test_local_and_remote_skip_translation_and_speech(self):
@@ -36,7 +42,9 @@ class PreparedSubtitleTests(unittest.TestCase):
                  patch('yt_dlp.YoutubeDL') as downloader, patch('review_tools.export_subtitles') as export, \
                  patch('cover_tools.save_cover'):
                 self.row.update(url=url,output_mode=mode)
-                downloader.return_value.__enter__.return_value.extract_info.return_value={'subtitles':{'en':[{}]}}
+                downloader.return_value.__enter__.return_value.extract_info.return_value={
+                    'subtitles':{'en':[{}]},'uploader':'Test publisher','upload_date':'20261120',
+                }
                 self.env['process'](self.row,'small')
                 data=json.loads((self.folder/'transcript.json').read_text(encoding='utf-8'))
                 self.assertEqual(data['chinese'][0][2],'现成字幕')
@@ -49,6 +57,9 @@ class PreparedSubtitleTests(unittest.TestCase):
                 if url.startswith('https'):
                     downloader.return_value.__enter__.return_value.extract_info.assert_called_once_with(url,download=True)
                     downloader.return_value.__enter__.return_value.process_ie_result.assert_not_called()
+                    with self.connect() as c:
+                        self.assertEqual(c.execute('SELECT publisher,published_at FROM videos').fetchone(),
+                                         ('Test publisher','2026-11-20（平台仅提供日期）'))
 
     def test_actual_duration_failure_does_not_fallback_or_overwrite(self):
         draft=self.folder/'transcript.json';draft.write_text('previous',encoding='utf-8')
